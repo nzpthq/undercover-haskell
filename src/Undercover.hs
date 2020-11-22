@@ -30,6 +30,7 @@ data PlayerStatus = PlayerStatus {_classicPlayers :: [User],
                                   _classicWord :: T.Text,
                                   _undercoverWord :: T.Text,
                                   _playingOrder :: [User]}
+                      deriving Show
 
 data PlayerDecisions = PlayerDecisions { _wordsSaids :: M.Map User [T.Text],
                                          _votes :: M.Map User (Maybe User)
@@ -103,36 +104,45 @@ onCommand user "!votestatus" _ g@(Started _ _ _) = onVotestatus g
 onCommand user _ _ g = pure g
 
 initGame :: Game -> [T.Text] -> IRC Game Game
-initGame g@(Pending players db) []
-    | null players = pure g
-    | otherwise = do
-        randomizedplayers <- liftIO $  shuffleM players
-        randomizedorder <- liftIO $  shuffleM players
-        randomEntry <- liftIO $ pickRandom db
-        ws <- liftIO $ shuffleM randomEntry
-        undercoverw <- liftIO $ pickRandom ws
-        classicw <- liftIO $ pickRandom $ delete undercoverw ws
-        let undercover = head randomizedplayers
-            playerlist = tail randomizedplayers
-            initWordSaids = foldr (\el acc -> M.insert el [] acc) M.empty players
-            initVotes = foldr (\el acc -> M.insert el Nothing acc) M.empty players
-        distribute randomizedorder [undercover] undercoverw classicw
-        pure $ Started (PlayerStatus playerlist [undercover] Nothing classicw undercoverw randomizedorder) (PlayerDecisions initWordSaids initVotes) db
-
+intGame g@(Pending [] _) _ = pure g
+initGame g [] = prepareGame 1 1 False g
+initGame g [(readMaybe . T.unpack -> Just n)] = prepareGame n n False g
+initGame g [(readMaybe . T.unpack -> Just n),"true"] = prepareGame n n True g 
+initGame g [(readMaybe . T.unpack -> Just mini),(readMaybe . T.unpack -> Just maxi)] = prepareGame mini maxi False g 
+initGame g [w1,w2,w3] = case (readMaybe $ T.unpack w1, readMaybe $ T.unpack w2) of
+    (Just mini, Just maxi) -> prepareGame mini maxi (w3 == "true") g
+    otherwise              -> privmsg gamechan "Parse error." >> pure g
+initGame g _ = pure g
+        
 {-
 initGame g@(Pending players db) (nbminS:nbmaxS:mrwhiteP:_) = case (readMaybe $ T.unpack nbminS, readMaybe $ T.unpack nbmaxS, readMaybe $ T.unpack mrwhiteP) of
     (Just nbmin, Just nbmax, Just mrwhite) ->  initGame' nbmin nbmax mrwhite
     otherwise -> privmsg gamechan "l'un des arguments n'est pas un nombre" >> pure g
   where initGame' nbmin nbmax mrwhite
-            | nbmin < 0 || nbmax < 0 = privmsg gamechan "l'un des arguments est négatif"  >> pure g
-            | nbmin > nbmax = privmsg gamechan "erreur : min > max"
-            | nbmax > (if mrwhite > 0 then length players + 2 else length player + 1) = privmsg gamechan "erreur: trop d'undercovers" >> pure g
-            | otherwise = do
+                        | otherwise = do
                 randomizedplayers <- liftIO $  shuffleM players
                 randomizedorder <- liftIO $  shuffleM players
                 randomEntry <- liftIO $ pickRandom db
                 nbUndercovers <- liftIO $ randomRIO (nbmin, nbmax)
 -}
+
+prepareGame nbmin nbmax mrwhiteP g@(Pending players db)
+    | nbmin < 0 || nbmax < 0 = privmsg gamechan "l'un des arguments est négatif"  >> pure g
+    | nbmin > nbmax = privmsg gamechan "erreur : min > max" >> pure g
+    | nbmax > (if mrwhiteP then length players - 2 else length players - 1) = privmsg gamechan "erreur: trop d'undercovers" >> pure g
+    | otherwise = do
+        nbUndercovers <- liftIO $ randomRIO (nbmin,nbmax)
+        liftIO $ putStrLn "generation du status"
+        status <- liftIO $ generateDistribution nbUndercovers mrwhiteP g
+        liftIO $ putStrLn $ "status fait: " ++ show status
+        let initWordSaids = foldr (\el acc -> M.insert el [] acc) M.empty players
+            initVotes = foldr (\el acc -> M.insert el Nothing acc) M.empty players
+        liftIO $ putStrLn "distribution"
+        distribute status
+        liftIO $ putStrLn "distribution faite"
+        privmsg gamechan $ T.pack $ "Il y a " ++ show nbmin ++ "-" ++ show nbmax ++ " agent(s) sous couverture." ++ if isNothing (_mrWhite status) then "" else "Attention, M. White est présent !"
+        pure $ Started status (PlayerDecisions initWordSaids initVotes) db
+
 
 {-| Génère une répartition de joueurs et retourne les joueurs "normaux", les undercover, le mot "normal", le mot de l'undercover, et l'ordre de jeu |-}
 generateDistribution :: Int -> Bool -> Game -> IO PlayerStatus
@@ -151,16 +161,19 @@ generateDistribution nbundercovers mrwhiteP g@(Pending players db) = do
         mrwhitepos <- randomRIO (2,length players)
         let playingorder = case mrwhite of
                             Nothing -> playingorder'
-                            Just pi -> insertAt mrwhitepos pi playingorder
+                            Just pi -> insertAt mrwhitepos pi $ delete pi playingorder'
         pure (PlayerStatus classics undercovers mrwhite classicw undercoverw playingorder)
 
-insertAt 0 el xs = (el:xs)
-insertAt _ _ [] = error "insertAt: out of bound"
-insertAt i el (x:xs) = (x : insertAt (i-1) el xs)
+insertAt i v l = let (begin,end) = splitAt i l
+                 in begin ++ [v] ++ end
 
-distribute randomizedorder undercovers undercoverw classicw= do 
-    forM randomizedorder $ \pi -> if pi `elem` undercovers then privmsg pi undercoverw else privmsg pi classicw
-    privmsg gamechan $ T.unwords $ ["Playing order is"] ++ randomizedorder
+distribute status = do 
+    forM (_playingOrder status) $ distribute'
+    privmsg gamechan $ T.unwords $ "Playing order is":_playingOrder status
+ where distribute' pi
+            | isJust (_mrWhite status) && pi == fromJust (_mrWhite status) = privmsg pi "tu es Mr White !"
+            | pi `elem` _undercoverPlayers status = privmsg pi (_undercoverWord status)
+            | otherwise = privmsg pi (_classicWord status)
 
 
 privmsg chan txt = send (Privmsg chan $ Right txt)
@@ -221,5 +234,4 @@ onVotestatus g = privmsg gamechan votestring >> pure g
           votestring = T.unwords [T.concat[user,"(",T.pack (show nbvotes),")"] | (user, nbvotes) <- zip (_playingOrder $ _players g) votestatus]
 clearVotes g = g & decisions . votes %~ reset
     where reset db = (\_ -> Nothing) <$> db
-
 
