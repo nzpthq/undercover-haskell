@@ -12,4 +12,4 @@ main = do
     let conn = plainConnection "irc.epiknet.org" 6667 & logfunc .~ stdoutLogger
         cfg = defaultInstanceConfig "Leon-GeorgesII" & handlers %~ (undercoverHandler:)
         
-    runClient conn (cfg & channels .~ [gamechan]) (Pending defaultconf [] database)
+    runClient conn (cfg & channels .~ [gamechan]) (Pending [] database)
