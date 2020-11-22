@@ -10,6 +10,6 @@ main :: IO ()
 main = do
     database <- fmap T.words . T.lines . T.pack <$> readFile "words.db"
     let conn = plainConnection "irc.epiknet.org" 6667 & logfunc .~ stdoutLogger
-        cfg = defaultInstanceConfig "Theodorine-Genevieve" & handlers %~ (undercoverHandler:)
+        cfg = defaultInstanceConfig "Leon-GeorgesII" & handlers %~ (undercoverHandler:)
         
-    runClient conn (cfg & channels .~ [gamechan]) (Pending [] database)
+    runClient conn (cfg & channels .~ [gamechan]) (Pending defaultconf [] database)
