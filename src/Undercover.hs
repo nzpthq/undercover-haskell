@@ -140,7 +140,7 @@ prepareGame nbmin nbmax mrwhiteP g@(Pending players db)
         liftIO $ putStrLn "distribution"
         distribute status
         liftIO $ putStrLn "distribution faite"
-        privmsg gamechan $ T.pack $ "Il y a " ++ show nbmin ++ "-" ++ show nbmax ++ " agent(s) sous couverture." ++ if isNothing (_mrWhite status) then "" else "Attention, M. White est présent !"
+        privmsg gamechan $ T.pack $ "Il y a " ++ show nbmin ++ "-" ++ show nbmax ++ " agent(s) sous couverture." ++ if isNothing (_mrWhite status) then "" else " Attention, M. White est présent !"
         pure $ Started status (PlayerDecisions initWordSaids initVotes) db
 
 
@@ -172,8 +172,8 @@ distribute status = do
     privmsg gamechan $ T.unwords $ "Playing order is":_playingOrder status
  where distribute' pi
             | isJust (_mrWhite status) && pi == fromJust (_mrWhite status) = privmsg pi "tu es Mr White !"
-            | pi `elem` _undercoverPlayers status = privmsg pi (_undercoverWord status)
-            | otherwise = privmsg pi (_classicWord status)
+            | pi `elem` _undercoverPlayers status = privmsg pi $ T.unwords ["Ton mot est:",(_undercoverWord status)]
+            | otherwise = privmsg pi $ T.unwords ["Ton mot est: ", (_classicWord status)]
 
 
 privmsg chan txt = send (Privmsg chan $ Right txt)
@@ -205,7 +205,7 @@ onReveal' user g
     | user `elem` _undercoverPlayers (_players g) = do
         privmsg gamechan $ "Tu es l'undercover, sneaky rat."
         pure g
-    | isJust (_mrWhite $ _players g) && user == fromJust (_mrWhite $ _players g) = privmsg gamechan "mrwhite" >> pure g
+    | isJust (_mrWhite $ _players g) && user == fromJust (_mrWhite $ _players g) = privmsg gamechan "Tu es M. White" >> pure g
     | otherwise = pure g
 
 
