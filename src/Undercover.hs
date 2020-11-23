@@ -63,13 +63,13 @@ undercoverHandler' (Channel chan user) raw = do
         [] -> pure ()
         (cmd:rest) -> do 
                   pending <- isPending
+                  onCommand user cmd
 
+                  liftIO $ putStrLn (show pending)
                   if pending then
                     onPendingCommand user cmd rest
                   else
                     onStartedCommand user cmd rest
-    pure ()
-
 
 
 
@@ -80,21 +80,27 @@ onPendingCommand user "!list" _  = do
     l <- use registeredPlayers
     privmsg gamechan $ T.unwords $ ["Participants are"] ++ l
 onPendingCommand user "!end" _ = privmsg gamechan "The game wasn't started dude."
+onPendingCommand user "!start" ws = do 
+    g <- getState
+    initGame g ws >>= putState
 onPendingCommand _ _ _ = pure ()
 
 onStartedCommand user "!end" _  = onEnd
+onStartedCommand user "!order" _  = do
+    g <- getState
+    privmsg gamechan (T.unwords ("Playing order is: ":_playingOrder (_players g)) ) 
+onStartedCommand user "!words" _  = onWords
+onStartedCommand user "!say" wlist = onSay user (T.unwords wlist) 
+onStartedCommand user "!unsay" wlist =  getState >>= onUnsay user >>= putState
+onStartedCommand user "!vote" (name:_)  = getState >>= onVote user name >>= putState
+onStartedCommand user "!votestatus" _ = getState >>= onVotestatus >>= putState
+onStartedCommand user "!reveal" _ = onReveal user
+
+
 onStartedCommand _ _ _ = pure ()
 
 
-onCommand user "!reveal" _ g = onReveal user g
-onCommand user "!order" _ g@(Started _ _ _) = privmsg gamechan (T.unwords ("Playing order is: ":_playingOrder (_players g)) ) >> pure g
-onCommand user "!words" _ g@(Started _ _ _)  = onWords g
-onCommand user "!say" wlist g@(Started _ _ _) = onSay user (T.unwords wlist) g
-onCommand user "!unsay" wlist g@(Started _ _ _) = onUnsay user g
-onCommand user "!vote" (name:_) g@(Started _ _ _) = onVote user name g
-onCommand user "!votestatus" _ g@(Started _ _ _) = onVotestatus g
-onCommand user "!start" ws g@(Pending _ _) = initGame g ws
-onCommand user "!aide" _ g = do
+onCommand user "!aide" = do
     privmsg user "!register : s'inscrire à la prochaine partie"
     privmsg user "!start : lancer une partie"
     privmsg user "!order : montre l'ordre des joueurs durant le tour"
@@ -104,12 +110,10 @@ onCommand user "!aide" _ g = do
     privmsg user "!votestatus : synthétiser les votes"
     privmsg user "!reveal : reveler son identité"
     privmsg user "!end : finir la partie"
-    pure g
-onCommand user "!rules" _ g = do
+onCommand user "!rules" = do
     notice user "Au début de la partie, un mot secret est distribué à chaque joueur. Tous ont le même, à l'exception de l'un d'entre eux qui est l'agent secret qui reçoit un mot différent. À chaque tour, les joueurs doivent dire un mot (en rapport ou non) avec leur secret. À la fin du tour, les joueurs votent pour éliminer l'un d'entre eux."
     notice user "Le joueur éliminé révèle son identité en tappant \"!reveal\". La partie se termine quand l'undercover est éliminé, ou qu'il ne reste plus que deux joueurs."
-    pure g
-onCommand user _ _ g = pure g
+onCommand user _ = pure ()
 
 
 
@@ -125,18 +129,6 @@ initGame g [w1,w2,w3] = case (readMaybe $ T.unpack w1, readMaybe $ T.unpack w2) 
 initGame g _ = pure g
 
 
-        
-{-
-initGame g@(Pending players db) (nbminS:nbmaxS:mrwhiteP:_) = case (readMaybe $ T.unpack nbminS, readMaybe $ T.unpack nbmaxS, readMaybe $ T.unpack mrwhiteP) of
-    (Just nbmin, Just nbmax, Just mrwhite) ->  initGame' nbmin nbmax mrwhite
-    otherwise -> privmsg gamechan "l'un des arguments n'est pas un nombre" >> pure g
-  where initGame' nbmin nbmax mrwhite
-                        | otherwise = do
-                randomizedplayers <- liftIO $  shuffleM players
-                randomizedorder <- liftIO $  shuffleM players
-                randomEntry <- liftIO $ pickRandom db
-                nbUndercovers <- liftIO $ randomRIO (nbmin, nbmax)
--}
 
 prepareGame nbmin nbmax mrwhiteP g@(Pending players db)
     | nbmin < 0 || nbmax < 0 = privmsg gamechan "l'un des arguments est négatif"  >> pure g
@@ -197,34 +189,65 @@ pickRandom l = do
     
 
 onRegister :: User -> IRC Game ()
-onRegister user = registeredPlayers %= nub . (user:)
+onRegister user = do 
+    registeredPlayers %= nub . (user:)
+    privmsg gamechan $ T.unwords [user, "est inscrit."]
 
 onEnd :: IRC Game ()
 onEnd = do
-    privmsg gamechan "The game is terminated" 
+    privmsg gamechan "La partie est finie." 
     g <- getState
     putState $ Pending [] $ _database g
 
-onReveal user g@(Pending _ _) = pure g
-onReveal user _ = do
+onReveal user = do
     players . playingOrder %= delete user 
     players . revealed %= (user:)
-    ret <- onReveal' undefined undefined
-    pure $ clearVotes ret
- where onReveal' user g
+    g <- getState 
+    onReveal' g
+    clearVotes 
+    isFinished
+
+ where onReveal' g 
         | user `elem` _classicPlayers (_players g) = do
             privmsg gamechan $ "Tu es un simple joueur." 
-            pure g
         | user `elem` _undercoverPlayers (_players g) = do
             privmsg gamechan $ "Tu es l'undercover, sneaky rat."
-            pure g
-        | isJust (_mrWhite $ _players g) && user == fromJust (_mrWhite $ _players g) = privmsg gamechan "Tu es M. White" >> pure g
-        | otherwise = pure g
+            players . nbRevealedUC += 1
+        | isJust (_mrWhite $ _players g) && user == fromJust (_mrWhite $ _players g) = do
+            privmsg gamechan "Tu es M. White" >> pure g
+            players . mrWhiteRevealed .= True
+        | otherwise = pure ()
+       isFinished = do
+           g <- getState
+           let nbucrevealed = _nbRevealedUC $ _players g
+               mrwhitefound = _mrWhiteRevealed $ _players g
+               uclist = _undercoverPlayers $ _players g
+               revealedlist = _revealed $ _players g
+               nbremaininguc = length uclist - nbucrevealed
+               nbremainingplayers = (length $ _playingOrder $ _players g) - nbremaininguc
+           if nbucrevealed == length uclist && mrwhitefound 
+                then do
+                    privmsg gamechan "Tous les intrus ont étés trouvés."
+                    onEnd
+            else if mrwhitefound && nbremaininguc >= nbremainingplayers
+                then do
+                    privmsg gamechan "Les undercover ont gagné !"
+                    onEnd
+            else if not mrwhitefound && length (_playingOrder $ _players g) == 1
+                then do 
+                    privmsg gamechan "M. White a gagné !"
+            else pure ()
 
-onSay :: User -> T.Text -> Game -> IRC Game Game
-onSay user words g = case user `M.lookup` _wordsSaids (_decisions g) of
-                Nothing -> pure g
-                Just _ -> pure $ g & decisions . wordsSaids %~ M.adjust (++ [words]) user 
+
+onSay :: User -> T.Text -> IRC Game ()
+onSay user words = do
+    g <- getState
+    ret <- onSay' g
+    putState ret
+
+  where onSay' g = case user `M.lookup` _wordsSaids (_decisions g) of
+                                 Nothing -> pure g
+                                 Just _ -> pure $ g & decisions . wordsSaids %~ M.adjust (++ [words]) user 
 onUnsay :: User -> Game -> IRC Game Game
 onUnsay user g = case user `M.lookup` _wordsSaids (_decisions g) of
                 Nothing -> pure g
@@ -232,11 +255,11 @@ onUnsay user g = case user `M.lookup` _wordsSaids (_decisions g) of
                 Just _ -> pure g
 
 
-onWords :: Game -> IRC Game Game
-onWords  g = do
+onWords :: IRC Game ()
+onWords = do
+    g <- getState
     let dumpEntry (k, v) = T.concat [k, " (", T.unwords v,")"]
     privmsg gamechan $ T.unwords $ (\pi -> dumpEntry (pi, fromJust $ M.lookup pi $ _wordsSaids $ _decisions g )) <$> (_playingOrder $ _players g) 
-    pure g
 onVote user name g = case user `M.lookup` _votes (_decisions g) of
     Nothing -> pure g
     Just x -> pure $ g & decisions . votes %~ M.insert user (Just name)
@@ -244,7 +267,8 @@ onVotestatus g = privmsg gamechan votestring >> pure g
     where computeVote user = length [vote | vote <- M.elems $ _votes $ _decisions g, isJust vote, fromJust vote == user]
           votestatus = computeVote <$> (_playingOrder $ _players g)
           votestring = T.unwords [T.concat[user,"(",T.pack (show nbvotes),")"] | (user, nbvotes) <- zip (_playingOrder $ _players g) votestatus]
-clearVotes g = g & decisions . votes %~ reset
+clearVotes :: IRC Game ()
+clearVotes = decisions . votes %= reset
     where reset db = (\_ -> Nothing) <$> db
 
 getState :: IRC Game Game
