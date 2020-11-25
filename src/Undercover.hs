@@ -116,7 +116,8 @@ onCommand user "!aide" = do
     privmsg user "!end : finir la partie"
 onCommand user "!rules" = do
     notice user "Au début de la partie, un mot secret est distribué à chaque joueur. Tous ont le même, à l'exception de l'un d'entre eux qui est l'agent secret qui reçoit un mot différent. À chaque tour, les joueurs doivent dire un mot (en rapport ou non) avec leur secret. À la fin du tour, les joueurs votent pour éliminer l'un d'entre eux."
-    notice user "Le joueur éliminé révèle son identité en tappant \"!reveal\". La partie se termine quand l'undercover est éliminé, ou qu'il ne reste plus que deux joueurs."
+    notice user "Le joueur éliminé révèle son identité en tapant \"!reveal\". La partie se termine quand l'undercover est éliminé, ou s'il ne reste plus que deux joueurs."
+    notice user "Un joueur est M. White. Il n'a pas de mot, et son rôle est de rester discret. S'il est identifié, il peut tenter de deviner le secret. S'il le découvre, il remporte la partie !"
 onCommand user _ = pure ()
 
 
