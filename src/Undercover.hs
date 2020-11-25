@@ -112,7 +112,7 @@ onCommand user "!aide" = do
     privmsg user "!words : connaître les mots dits"
     privmsg user "!vote : voter contre quelqu'un (écrase le vote précédent)"
     privmsg user "!votestatus : synthétiser les votes"
-    privmsg user "!reveal : reveler son identité"
+    privmsg user "!reveal : révéler son identité"
     privmsg user "!end : finir la partie"
 onCommand user "!rules" = do
     notice user "Au début de la partie, un mot secret est distribué à chaque joueur. Tous ont le même, à l'exception de l'un d'entre eux qui est l'agent secret qui reçoit un mot différent. À chaque tour, les joueurs doivent dire un mot (en rapport ou non) avec leur secret. À la fin du tour, les joueurs votent pour éliminer l'un d'entre eux."
