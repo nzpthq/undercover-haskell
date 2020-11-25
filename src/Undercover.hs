@@ -41,7 +41,8 @@ data PlayerDecisions = PlayerDecisions { _wordsSaids :: M.Map User [T.Text],
 
 data Game = Started  { _players :: PlayerStatus,
                        _decisions :: PlayerDecisions,
-                       _database :: [[T.Text]]}
+                       _database :: [[T.Text]],
+                       _waitingForWhite :: Bool}
           | Pending {_registeredPlayers :: [User], _database :: [[T.Text]]}
 
 makeLenses ''PlayerStatus
@@ -63,11 +64,14 @@ undercoverHandler' (Channel chan user) raw = do
         [] -> pure ()
         (cmd:rest) -> do 
                   pending <- isPending
+                  waitingwhite <- isWaitingForWhite
                   onCommand user cmd
 
                   liftIO $ putStrLn (show pending)
                   if pending then
                     onPendingCommand user cmd rest
+                  else if waitingwhite then
+                    onWaitingWhite user cmd rest
                   else
                     onStartedCommand user cmd rest
 
@@ -116,6 +120,20 @@ onCommand user "!rules" = do
 onCommand user _ = pure ()
 
 
+onWaitingWhite user "!try" rest = do
+    s <- getState
+    when (fromJust (_mrWhite $ _players s) == user) $
+        if T.toLower (T.unwords rest) == T.toLower (_classicWord (_players s)) then do
+            privmsg gamechan "M. White a découvert le mot ! Il l'emporte donc et vous écrase tous ! Félicitations à lui !"
+            onEnd
+          else do
+            privmsg gamechan "Désolé M. White, ce n'était pas le bon mot ! Houste !"
+            waitingForWhite .= False
+            isFinished
+onWaitingWhite user "!end" rest = onEnd
+onWaitingWhite _ _ _ = pure ()
+    
+
 
 initGame :: Game -> [T.Text] -> IRC Game Game
 intGame g@(Pending [] _) _ = pure g
@@ -142,7 +160,7 @@ prepareGame nbmin nbmax mrwhiteP g@(Pending players db)
             initVotes = foldr (\el acc -> M.insert el Nothing acc) M.empty players
         distribute status
         privmsg gamechan $ T.pack $ "Il y a " ++ show nbmin ++ "-" ++ show nbmax ++ " agent(s) sous couverture." ++ if isNothing (_mrWhite status) then "" else " Attention, M. White est présent !"
-        pure $ Started status (PlayerDecisions initWordSaids initVotes) db
+        pure $ Started status (PlayerDecisions initWordSaids initVotes) db False
 
 
 {-| Génère une répartition de joueurs et retourne les joueurs "normaux", les undercover, le mot "normal", le mot de l'undercover, et l'ordre de jeu |-}
@@ -203,40 +221,43 @@ onReveal user = do
     players . playingOrder %= delete user 
     players . revealed %= (user:)
     g <- getState 
-    onReveal' g
     clearVotes 
-    isFinished
+    onReveal' g
 
  where onReveal' g 
         | user `elem` _classicPlayers (_players g) = do
             privmsg gamechan $ "Tu es un simple joueur." 
+            isFinished
         | user `elem` _undercoverPlayers (_players g) = do
             privmsg gamechan $ "Tu es l'undercover, sneaky rat."
             players . nbRevealedUC += 1
+            isFinished
         | isJust (_mrWhite $ _players g) && user == fromJust (_mrWhite $ _players g) = do
-            privmsg gamechan "Tu es M. White" >> pure g
+            privmsg gamechan "Tu es M. White."
+            privmsg gamechan $ T.unwords [user, " choisis un mot en tapant !try. Si tu découvres le mot secret, tu remportes la partie."]
             players . mrWhiteRevealed .= True
+            waitingForWhite .= True 
         | otherwise = pure ()
-       isFinished = do
-           g <- getState
-           let nbucrevealed = _nbRevealedUC $ _players g
-               mrwhitefound = _mrWhiteRevealed $ _players g
-               uclist = _undercoverPlayers $ _players g
-               revealedlist = _revealed $ _players g
-               nbremaininguc = length uclist - nbucrevealed
-               nbremainingplayers = (length $ _playingOrder $ _players g) - nbremaininguc
-           if nbucrevealed == length uclist && mrwhitefound 
-                then do
-                    privmsg gamechan "Tous les intrus ont étés trouvés."
-                    onEnd
-            else if mrwhitefound && nbremaininguc >= nbremainingplayers
-                then do
-                    privmsg gamechan "Les undercover ont gagné !"
-                    onEnd
-            else if not mrwhitefound && length (_playingOrder $ _players g) == 1
-                then do 
-                    privmsg gamechan "M. White a gagné !"
-            else pure ()
+isFinished = do
+   g <- getState
+   let nbucrevealed = _nbRevealedUC $ _players g
+       mrwhitefound = _mrWhiteRevealed $ _players g
+       uclist = _undercoverPlayers $ _players g
+       revealedlist = _revealed $ _players g
+       nbremaininguc = length uclist - nbucrevealed
+       nbremainingplayers = (length $ _playingOrder $ _players g) - nbremaininguc
+   if nbucrevealed == length uclist && mrwhitefound 
+        then do
+            privmsg gamechan "Tous les intrus ont étés trouvés."
+            onEnd
+    else if mrwhitefound && nbremaininguc >= nbremainingplayers
+        then do
+            privmsg gamechan "Les undercover ont gagné !"
+            onEnd
+    else if not mrwhitefound && length (_playingOrder $ _players g) == 1
+        then do 
+            privmsg gamechan "M. White a gagné !"
+    else pure ()
 
 
 onSay :: User -> T.Text -> IRC Game ()
@@ -289,5 +310,17 @@ isPending = do
         Pending _ _ -> pure True
         _             -> pure False
 isStarted :: IRC Game Bool
-isStarted = not <$> isPending
+isStarted = do
+    s <- getState
+    case s of
+        Started _ _ _ False -> pure True
+        _ -> pure False
+
+isWaitingForWhite :: IRC Game Bool
+isWaitingForWhite = do
+    s <- getState
+    case s of 
+        Started _ _ _ True-> pure True
+        _ -> pure False
+
 
